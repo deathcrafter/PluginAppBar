@@ -22,6 +22,7 @@ enum WEdge {
 
 struct MonitorInfo
 {
+	HMONITOR hMon;
 	bool isValid;
 	std::wstring name;
 	std::wstring id;
@@ -33,6 +34,7 @@ struct MonitorInfo
 	std::wstring scaleStr;
 
 	MonitorInfo() :
+		hMon(NULL),
 		name(),
 		id(),
 		num(0),
@@ -44,6 +46,7 @@ struct MonitorInfo
 		isValid(true)
 	{}
 	MonitorInfo(bool valid) :
+		hMon(NULL),
 		name(),
 		id(),
 		num(0),
@@ -78,4 +81,6 @@ struct RectStr {
 };
 
 void UpdateMonitorsInfo();
+void UpdateMonitorInfo(MonitorInfo& monitor);
+void UpdateExistingMonitorsInfo();
 MonitorInfo GetMonitor(std::vector<std::wstring>& priorities, bool returnPrimary = true);

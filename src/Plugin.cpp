@@ -1,6 +1,6 @@
 #include "Plugin.h"
 #include "Measure.h"
-// #include "String.h"
+#include "String.h"
 #include <mutex>
 #include <ShellScalingApi.h>
 
@@ -11,10 +11,7 @@ static std::wstring primaryMonitorId;
 static std::wstring availableMonitors;
 static std::unordered_map<std::wstring, MonitorInfo> monitors;
 
-BOOL WINAPI DllMain(
-	HINSTANCE hinstDLL,  // handle to DLL module
-	DWORD fdwReason,     // reason for calling function
-	LPVOID lpvReserved)  // reserved
+BOOL WINAPI DllMain( HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)  // reserved
 {
 	switch (fdwReason)
 	{
@@ -29,7 +26,6 @@ BOOL WINAPI DllMain(
 
 MonitorInfo GetMonitor(std::vector<std::wstring>& priorities, bool returnPrimary)
 {
-	std::unique_lock<std::mutex> lk(mt);
 	for (size_t i = 0; i < priorities.size(); i++) {
 		auto iter = monitors.find(priorities[i]);
 		if (iter != monitors.end())
@@ -47,12 +43,14 @@ double GetScaleForMonitor(HMONITOR hMon)
 	return 1.0;
 }
 
-BOOL MonitorEnumProc(
-	HMONITOR hMon,
-	HDC hDc,
-	LPRECT rect,
-	LPARAM lParam
-)
+std::wstring ExtractUniqueMonitorID(std::wstring rawId)
+{
+	rawId = rawId.substr(11, rawId.size() - 50);
+	size_t j = rawId.find_last_of(L'D');
+	return rawId.substr(j + 1);
+}
+
+BOOL MonitorEnumProc(HMONITOR hMon, HDC hDc, LPRECT rect, LPARAM lParam)
 {
 	std::pair<std::unordered_map<std::wstring, MonitorInfo>, std::wstring>* pair
 		= (std::pair<std::unordered_map<std::wstring, MonitorInfo>, std::wstring>*)lParam;
@@ -62,6 +60,7 @@ BOOL MonitorEnumProc(
 	monInfoEx.cbSize = sizeof(MONITORINFOEX);
 	if (GetMonitorInfo(hMon, &monInfoEx))
 	{
+		monInfo.hMon = hMon;
 		monInfo.name = monInfoEx.szDevice;
 		monInfo.num = _wtoi(monInfo.name.substr(monInfo.name.size() - 1, monInfo.name.size() - 1).c_str());
 		monInfo.rcMon = monInfoEx.rcMonitor;
@@ -73,16 +72,20 @@ BOOL MonitorEnumProc(
 		dDevice.cb = sizeof(DISPLAY_DEVICE);
 		EnumDisplayDevices(monInfo.name.c_str(), 0, &dDevice, EDD_GET_DEVICE_INTERFACE_NAME);
 		monInfo.id = dDevice.DeviceID;
-		monInfo.id = monInfo.id.substr(11, monInfo.id.size() - 49);
+		monInfo.id = ExtractUniqueMonitorID(monInfo.id);
 		if (monInfo.isPrimary)
 			primaryMonitorId = monInfo.id;
-		pair->second.append(monInfo.id);
-		pair->second.append(L";");
+		pair->second.append(
+			std::to_wstring(monInfo.rcMon.left) + L"|" + std::to_wstring(monInfo.rcMon.top) +
+			L"|" +
+			std::to_wstring(monInfo.rcMon.right - monInfo.rcMon.left) + L"|" + std::to_wstring(monInfo.rcMon.bottom - monInfo.rcMon.top) +
+			L"|" +
+			monInfo.id +
+			L";"
+		);
 		monInfo.scale = GetScaleForMonitor(hMon);
 		monInfo.scaleStr = std::to_wstring(monInfo.scale);
-		pair->first.insert(
-			std::pair<std::wstring, MonitorInfo> {monInfo.id, monInfo}
-		);
+		pair->first.emplace(monInfo.id, monInfo);
 	}
 	return TRUE;
 }
@@ -96,10 +99,47 @@ void UpdateMonitorsInfo()
 		monitors.clear();
 		monitors = pair.first;
 		availableMonitors.clear();
-		availableMonitors = pair.second;
+		availableMonitors = pair.second.substr(0, pair.second.size() - 1);
 	}
 	for (auto listItem : Measure::measureList)
 	{
+		listItem.second->Execute(listItem.second->displaySettingsUpdatedAction.c_str());
+		listItem.second->UpdateAppBarPos();
+	}
+}
+
+void UpdateMonitorInfo(MonitorInfo& monInfo)
+{
+	MONITORINFOEX monInfoEx;
+	ZeroMemory(&monInfoEx, sizeof(monInfoEx));
+	monInfoEx.cbSize = sizeof(MONITORINFOEX);
+	if (GetMonitorInfo(monInfo.hMon, &monInfoEx))
+	{
+		monInfo.rcMon = monInfoEx.rcMonitor;
+		monInfo.rcWork = monInfoEx.rcWork;
+		availableMonitors.append(
+			std::to_wstring(monInfo.rcMon.left) + L"|" + std::to_wstring(monInfo.rcMon.top) +
+			L"|" +
+			std::to_wstring(monInfo.rcMon.right - monInfo.rcMon.left) + L"|" + std::to_wstring(monInfo.rcMon.bottom - monInfo.rcMon.top) +
+			L"|" +
+			monInfo.id +
+			L";"
+		);
+		monInfo.scale = GetScaleForMonitor(monInfo.hMon);
+		monInfo.scaleStr = std::to_wstring(monInfo.scale);
+	}
+}
+
+void UpdateExistingMonitorsInfo()
+{
+	availableMonitors.clear();
+	for (auto monitor : monitors)
+	{
+		UpdateMonitorInfo(monitor.second);
+	}
+	for (auto listItem : Measure::measureList)
+	{
+		listItem.second->Execute(listItem.second->displaySettingsUpdatedAction.c_str());
 		listItem.second->UpdateAppBarPos();
 	}
 }
@@ -126,11 +166,24 @@ PLUGIN_EXPORT double Update(void* data)
 	return 0.0;
 }
 
-/*PLUGIN_EXPORT LPCWSTR GetString(void* data)
+PLUGIN_EXPORT void ExecuteBang(void* data, LPCWSTR args)
 {
 	Measure* measure = (Measure*)data;
-	return nullptr;
-}*/
+	if (measure->watchOnly)
+	{
+		RmLog(measure->rm, LOG_WARNING, L"Commands not supported in watch only mode!");
+		return;
+	}
+	if (_wcsicmp(args, L"UpdatePosition") == 0)
+	{
+		measure->Update();
+		measure->UpdateAppBarPos();
+	}
+	else
+	{
+		RmLogF(measure->rm, LOG_ERROR, L"Invalid command: %s", args);
+	}
+}
 
 PLUGIN_EXPORT void Finalize(void* data)
 {

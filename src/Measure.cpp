@@ -38,26 +38,12 @@ Measure::~Measure()
 void Measure::Initialize()
 {
 	hwnd = RmGetSkinWindow(rm);
-	requiredSpace = RmReadInt(rm, L"RequiredSpace", 10);
-	std::wstring edge = RmReadString(rm, L"Edge", L"top");
-	if (_wcsicmp(edge.c_str(), L"left") == 0)
-		edge = LEFT;
-	else if (_wcsicmp(edge.c_str(), L"right") == 0)
-		edge = RIGHT;
-	else if (_wcsicmp(edge.c_str(), L"bottom") == 0)
-		edge = BOTTOM;
-	else
-		edge = TOP;
-	priorityList = split(RmReadString(rm, L"PriorityList", L""), L";");
-	if (priorityList.empty())
-		usePrimaryMonitor = true;
-	else
-		usePrimaryMonitor = RmReadInt(rm, L"UsePrimaryMonitorByDefault", 0) == 1;
-	dpiAware = RmReadInt(rm, L"DPIAware", 0) == 1;
 	watchOnly = RmReadInt(rm, L"WatchOnly", 0) == 1;
 
+	Update();
+
+	displaySettingsUpdatedAction = RmReadString(rm, L"DisplaySettingsUpdatedAction", L"", FALSE);
 	appBarPosSetAction = RmReadString(rm, L"AppBarPosSetAction", L"", FALSE);
-	// RmLog(rm, LOG_NOTICE, appBarPosSetAction.c_str());
 	fullScreenActivateAction = RmReadString(rm, L"FullScreenActivateAction", L"", FALSE);
 	fullScreenDeactivatedAction = RmReadString(rm, L"FullScreenDeactivateAction", L"", FALSE);
 	monitorDetectedAction = RmReadString(rm, L"MonitorDetectedAction", L"", FALSE);
@@ -75,6 +61,22 @@ void Measure::Initialize()
 
 void Measure::Update()
 {
+	requiredSpace = RmReadInt(rm, L"RequiredSpace", 10);
+	std::wstring edge = RmReadString(rm, L"Edge", L"top");
+	if (_wcsicmp(edge.c_str(), L"left") == 0)
+		edge = LEFT;
+	else if (_wcsicmp(edge.c_str(), L"right") == 0)
+		edge = RIGHT;
+	else if (_wcsicmp(edge.c_str(), L"bottom") == 0)
+		edge = BOTTOM;
+	else
+		edge = TOP;
+	priorityList = split(RmReadString(rm, L"PriorityList", L""), L";");
+	if (priorityList.empty())
+		usePrimaryMonitor = true;
+	else
+		usePrimaryMonitor = RmReadInt(rm, L"UsePrimaryMonitorByDefault", 0) == 1;
+	dpiAware = RmReadInt(rm, L"DPIAware", 0) == 1;
 }
 
 void Measure::Finalize()
@@ -92,8 +94,9 @@ void Measure::AddRef()
 	auto found = measureList.find(hwnd);
 	if (found != measureList.end())
 		return;
+	if (measureList.size() == 0)
+		primaryHwnd = hwnd;
 	measureList.emplace(hwnd, this);
-	primaryHwnd = hwnd;
 	if (NULL == ref++) {
 		if (!Hook(GetWindowThreadProcessId(hwnd, NULL)))
 			RmLogF(rm, LOG_ERROR, L"Couldn't set message hook with error: %ld", GetLastError());
@@ -125,20 +128,24 @@ LRESULT Measure::CallWndProc(int nCode, WPARAM wParam, LPARAM lParam)
 		return CallNextHookEx(NULL, nCode, wParam, lParam);
 
 	switch (st->message) {
+	case WM_ACTIVATE:
 	case WM_WINDOWPOSCHANGED:
 		APPBARDATA data;
 		ZeroMemory(&data, sizeof(data));
 		data.cbSize = sizeof(APPBARDATA);
 		data.hWnd = st->hwnd;
-		SHAppBarMessage(ABM_WINDOWPOSCHANGED, &data);
+		SHAppBarMessage(
+			st->message == WM_ACTIVATE ? ABM_ACTIVATE : ABM_WINDOWPOSCHANGED,
+			&data
+		);
 		break;
-	case WM_DISPLAYCHANGE: // not handling because wm_settingchange is always sent after wm_displaychange
-		break;
-	case WM_DPICHANGED: // not handling because wm_settingchange is always sent after wm_dpichange
+	case WM_DISPLAYCHANGE:
+		if (st->hwnd == primaryHwnd)
+			UpdateMonitorsInfo();
 		break;
 	case WM_SETTINGCHANGE:
 		if (st->hwnd == primaryHwnd && st->wParam == SPI_SETWORKAREA)
-			UpdateMonitorsInfo();
+			UpdateExistingMonitorsInfo();
 		break;
 	default:
 		break;

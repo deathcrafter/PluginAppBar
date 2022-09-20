@@ -8,6 +8,7 @@ public:
 	static int ref;
 	static HWND primaryHwnd;
 	static UINT APPBAR_CALLBACK;
+	static bool displaySettingsChanged;
 
 	void* rm; // measure instance
 	void* skin; // skin instance
@@ -26,6 +27,7 @@ public:
 	bool watchOnly;
 	bool dpiAware;
 
+	std::wstring displaySettingsUpdatedAction;
 	std::wstring appBarPosSetAction;
 	std::wstring fullScreenActivateAction;
 	std::wstring fullScreenDeactivatedAction;
@@ -39,7 +41,8 @@ public:
 	void Finalize();
 	void Update();
 	void UpdateAppBarPos();
-	
+	void Execute(LPCWSTR bang);
+
 private:
 	// Measure Management and Hooking
 	void AddRef();
@@ -55,5 +58,4 @@ private:
 	void ProcessAppbarMessage(UINT message, LPARAM lParam);
 	
 	std::wstring ReplaceValuesInBang(std::wstring bang);
-	void Execute(LPCWSTR bang);
 };
